@@ -1,0 +1,38 @@
+import discord
+import os
+from dotenv import load_dotenv
+from system_core import ShareHouseSystem
+import personas
+
+# 設定読み込み
+load_dotenv()
+TOKEN = os.getenv('DISCORD_TOKEN')
+
+# Discord接続準備
+intents = discord.Intents.default()
+intents.message_content = True
+client = discord.Client(intents=intents)
+
+# 世界の生成
+house = ShareHouseSystem()
+
+@client.event
+async def on_ready():
+    print(f'ログインしました: {client.user}')
+
+@client.event
+async def on_message(message):
+    if message.author == client.user:
+        return
+
+    # 世界の状態を更新・取得
+    status = house.get_status()
+    
+    # 返答を生成
+    response = personas.get_response(message.content, status)
+    
+    # 送信
+    await message.channel.send(response)
+
+# 起動
+client.run(TOKEN)
