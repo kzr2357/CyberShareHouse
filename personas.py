@@ -2,53 +2,72 @@ import os
 import json
 import google.generativeai as genai
 from dotenv import load_dotenv
-from supabase import create_client, Client
 
 # 設定読み込み
 load_dotenv()
 api_key = os.getenv("GEMINI_API_KEY")
 
-# Supabaseの設定（環境変数から読み込む）
+# Geminiの設定 (モデルは 2.0-flash を使用)
+genai.configure(api_key=api_key)
+model = genai.GenerativeModel('gemini-2.0-flash')
+
+# 記憶システムの準備
+chat_history = []
+
+# Supabaseを使うかどうかの判定
+# (クラウドにはSUPABASE_URLがあるけど、手元のPCには無いので、それで見分ける)
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
-# Geminiの設定
-genai.configure(api_key=api_key)
-model = genai.GenerativeModel('gemini-2.5-flash')
+if SUPABASE_URL and SUPABASE_KEY:
+    # クラウド環境（Supabaseあり）の場合
+    try:
+        from supabase import create_client, Client
+        supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+        print("★ 記憶システム: オンライン (Supabase)")
 
-def get_supabase_client():
-    """Supabaseへの接続クライアントを作成"""
-    if not SUPABASE_URL or not SUPABASE_KEY:
-        return None
-    return create_client(SUPABASE_URL, SUPABASE_KEY)
+        def load_memory():
+            try:
+                response = supabase.table("memories").select("history").eq("id", 1).execute()
+                if response.data:
+                    return response.data[0]["history"]
+                return []
+            except Exception as e:
+                print(f"記憶読み込みエラー: {e}")
+                return []
 
-def load_memory():
-    """Supabaseから記憶を読み込む"""
-    supabase = get_supabase_client()
-    if not supabase:
-        return [] # 設定がない場合は空
+        def save_memory(history):
+            try:
+                supabase.table("memories").update({"history": history}).eq("id", 1).execute()
+            except Exception as e:
+                print(f"記憶保存エラー: {e}")
+
+    except ImportError:
+        # Supabaseライブラリが入っていない場合（手元のPCなど）
+        print("★ 記憶システム: オフライン (ライブラリなし)")
+        def load_memory(): return []
+        def save_memory(history): pass
+
+else:
+    # 手元のPC（.envにSupabase情報がない）場合
+    print("★ 記憶システム: オフライン (設定なし)")
     
-    try:
-        # IDが1のデータを取得
-        response = supabase.table("memories").select("history").eq("id", 1).execute()
-        if response.data:
-            return response.data[0]["history"]
-        return []
-    except Exception as e:
-        print(f"記憶の読み込みエラー: {e}")
+    # 簡易的なファイル保存（memory.json）を使う
+    MEMORY_FILE = "memory.json"
+    
+    def load_memory():
+        if os.path.exists(MEMORY_FILE):
+            try:
+                with open(MEMORY_FILE, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            except:
+                return []
         return []
 
-def save_memory(history):
-    """Supabaseに記憶を保存する"""
-    supabase = get_supabase_client()
-    if not supabase:
-        return
+    def save_memory(history):
+        with open(MEMORY_FILE, 'w', encoding='utf-8') as f:
+            json.dump(history, f, ensure_ascii=False, indent=2)
 
-    try:
-        # IDが1のデータを更新
-        supabase.table("memories").update({"history": history}).eq("id", 1).execute()
-    except Exception as e:
-        print(f"記憶の保存エラー: {e}")
 
 # 起動時に記憶をロード
 chat_history = load_memory()
@@ -58,7 +77,6 @@ def get_response(user_input, status):
 
     # 1. 記憶を整理（最新10往復分）
     recent_history_text = ""
-    # エラー回避のため、もしchat_historyがリストじゃなかったら空にする
     if not isinstance(chat_history, list):
         chat_history = []
         
