@@ -13,8 +13,7 @@ supabase_key = os.getenv("SUPABASE_KEY")
 # APIキーの設定
 genai.configure(api_key=api_key)
 
-# ★モデル設定（ここがエラーの原因でした。Lite版を正しく指定します）
-model = genai.GenerativeModel('gemini-2.0-flash-lite')
+model = genai.GenerativeModel('gemini-flash-lite-latest')
 
 # トークナイザの初期化
 tokenizer = SemanticPrimeTokenizer()
