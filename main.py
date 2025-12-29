@@ -69,18 +69,48 @@ async def on_message(message):
         await send_as_character(message.channel, "システム", "【システム】全ステータス回復。短期記憶バッファを消去しました。正常モードへ移行します。")
         return
 
-    # 通常会話 + 食事自動判定
+   # （前略... importなどはそのまま）
+
+    # 通常会話処理
     status = house.get_status()
     script_text = personas.get_response(message.content, status)
 
-    # ★食事イベントの検知
+    # ★ 1. 食事判定
     if "【EVENT:EAT】" in script_text:
-        # バッテリーを回復！
         house.battery = 100.0
-        # タグを消して、会話文だけにする
         script_text = script_text.replace("【EVENT:EAT】", "")
-        # （隠し味：システムログをこっそり出す）
-        print("★ 食事を検知！バッテリー回復しました")
+
+    # ★ 2. 共鳴値の抽出と表示
+    resonance_display = ""
+    res_match = re.search(r"【RESONANCE:(.*?):(.*?)】", script_text)
+    if res_match:
+        val = res_match.group(1)
+        words = res_match.group(2)
+        # 画面に表示する文字列を作る
+        if val != "1":
+            resonance_display = f"\n`[共鳴観測: {val} ({words})]`"
+        
+        # 本文からタグを消す
+        script_text = script_text.replace(res_match.group(0), "")
+
+    # 3. 会話の再生
+    lines = script_text.strip().split('\n')
+    for line in lines:
+        line = line.strip()
+        if not line: continue
+        
+        match = re.search(r"【(.*?)】(.*)", line)
+        if match:
+            name = match.group(1)
+            content = match.group(2)
+            await send_as_character(message.channel, name, content)
+            await asyncio.sleep(1.0)
+        else:
+            await message.channel.send(line)
+            
+    # ★ 最後に共鳴値をひっそりと表示
+    if resonance_display:
+        await message.channel.send(resonance_display)
 
     # 脚本を再生
     lines = script_text.strip().split('\n')

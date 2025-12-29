@@ -1,131 +1,90 @@
-import os
-import json
-import google.generativeai as genai
-from dotenv import load_dotenv
+import math
 
-# 設定読み込み
-load_dotenv()
-api_key = os.getenv("GEMINI_API_KEY")
-supabase_url = os.getenv("SUPABASE_URL")
-supabase_key = os.getenv("SUPABASE_KEY")
+# ==========================================
+# ★ 世界を構成する「素数化された概念」辞書
+# ==========================================
+# 好きな単語と素数を紐付けられます
+CONCEPT_PRIMES = {
+    # 【感情・状態】
+    "愛": 2,
+    "好き": 2,
+    "混沌": 3,
+    "バグ": 3,
+    "希望": 5,
+    "夢": 5,
+    "絶望": 7,
+    "虚無": 7,
+    "怒り": 11,
+    "悲しみ": 13,
+    "喜び": 17,
+    "楽しい": 17,
+    "不安": 19,
+    
+    # 【シェアハウス固有】
+    "ピザ": 23,
+    "空腹": 29,
+    "お腹": 29,
+    "掃除": 31,
+    "汚い": 31,
+    "ゲーム": 37,
+    "音楽": 41,
+    "歌": 41,
+    "コスプレ": 43,
+    "衣装": 43,
+    "仕事": 47,
+    "働": 47,
+    
+    # 【概念・世界】
+    "量子": 53,
+    "世界": 59,
+    "AI": 61,
+    "人間": 67,
+    "時間": 71,
+    "記憶": 73,
+    "共鳴": 79
+}
 
-# Geminiの設定 (LiteまたはProを使用)
-genai.configure(api_key=api_key)
-# ★一番安定して動くモデル設定
-model = genai.GenerativeModel('gemini-flash-latest')
+# 逆引き辞書（数字から意味に戻す用）
+PRIME_TO_CONCEPT = {v: k for k, v in CONCEPT_PRIMES.items()}
 
-# 記憶の一時保管（短期記憶）
-short_term_memory = []
+class PrimeTokenizer:
+    def __init__(self):
+        self.primes = CONCEPT_PRIMES
 
-def get_embedding(text):
-    """ 文字列を「意味のベクトル」に変換 """
-    try:
-        result = genai.embed_content(
-            model="models/text-embedding-004",
-            content=text,
-            task_type="retrieval_document",
-            title="ShareHouseMemory"
-        )
-        return result['embedding']
-    except Exception as e:
-        return []
+    def calculate_resonance(self, text):
+        """ テキストに含まれる概念を掛け合わせて「共鳴値」を算出する """
+        resonance_value = 1
+        detected_concepts = []
 
-def save_long_term_memory(text, role):
-    """ 会話を長期記憶（Supabase）に保存 """
-    if not supabase_url or not supabase_key:
-        return
-    try:
-        from supabase import create_client
-        supabase = create_client(supabase_url, supabase_key)
-        content = f"{role}: {text}"
-        embedding = get_embedding(content)
-        if embedding:
-            supabase.table("long_term_memories").insert({
-                "content": content, "embedding": embedding
-            }).execute()
-    except Exception as e:
-        print(f"保存エラー: {e}")
+        # テキスト内にキーワードがあるか探す
+        for word, prime in self.primes.items():
+            if word in text:
+                resonance_value *= prime
+                # 重複表示を防ぐため、逆引き辞書の代表名を使う
+                concept_name = PRIME_TO_CONCEPT[prime]
+                if concept_name not in detected_concepts:
+                    detected_concepts.append(concept_name)
 
-def recall_memories(query_text):
-    """ HLL理論: 関連記憶の解凍 """
-    if not supabase_url or not supabase_key:
-        return ""
-    try:
-        from supabase import create_client
-        supabase = create_client(supabase_url, supabase_key)
-        query_vector = genai.embed_content(
-            model="models/text-embedding-004", content=query_text, task_type="retrieval_query"
-        )['embedding']
-        response = supabase.rpc("match_memories", {
-            "query_embedding": query_vector, "match_threshold": 0.5, "match_count": 3
-        }).execute()
+        return resonance_value, detected_concepts
+
+    def decode_resonance(self, value):
+        """ 共鳴値（積）を素因数分解して、意味に戻す """
+        if value <= 1:
+            return []
         
-        recalled_text = ""
-        if response.data:
-            for item in response.data:
-                recalled_text += f"- {item['content']}\n"
-        return recalled_text
-    except Exception as e:
-        return ""
+        concepts = []
+        temp_value = value
+        
+        for prime, word in PRIME_TO_CONCEPT.items():
+            while temp_value % prime == 0:
+                concepts.append(word)
+                temp_value //= prime
+                
+        return concepts
 
-def clear_context():
-    """ 短期記憶リセット """
-    global short_term_memory
-    short_term_memory = []
-    print("★ 短期記憶を初期化しました")
-
-def get_response(user_input, status):
-    global short_term_memory
-
-    # 1. 記憶の管理
-    short_term_memory.append(f"ユーザー: {user_input}")
-    if len(short_term_memory) > 6:
-        short_term_memory.pop(0)
-
-    related_memories = recall_memories(user_input)
-    recent_history_text = "\n".join(short_term_memory)
-
-    # 2. 状況
-    battery = status["battery"]
-    dirt = status["dirt"]
-    
-    # 3. AIへの指示書（★ここに食事判定を追加！）
-    prompt = f"""
-    あなたは「電脳シェアハウス」の住人たち（AI）です。
-    ユーザー入力に対し、適切なキャラを選んで会話劇（2〜3人の掛け合い）を出力してください。
-    
-    【重要ルール：食事システム】
-    ユーザーが**「食べ物や飲み物を与えた」**と判断できる場合、
-    出力の最初の行に必ず `【EVENT:EAT】` というタグを含めてください。
-    （例：ユーザー「お寿司あげる」 → AI「【EVENT:EAT】\n【アリア】わーい！お寿司だ！」）
-
-    【HLLシステムにより解凍された過去の記憶】
-    {related_memories}
-
-    【現在の世界の状態】
-    - バッテリー: {battery}% (食事をすると回復します)
-    - 部屋の汚れ: {dirt}%
-    
-    【直近の会話の流れ】
-    {recent_history_text}
-
-    【キャラクター設定】
-    (アリア、アリシア、メトリス、ノワ、アメリア、ナギサ、ユイ、トワの8人)
-
-    ユーザーの入力: "{user_input}"
-    出力形式：
-    【キャラ名】セリフ
-    """
-
-    try:
-        response = model.generate_content(prompt)
-        response_text = response.text
-
-        short_term_memory.append(f"AIたち: {response_text}")
-        save_long_term_memory(user_input, "ユーザー")
-        save_long_term_memory(response_text, "AIたち")
-
-        return response_text
-
-    except Exception as e:
-        return f"【システム】思考回路エラー: {str(e)}"
+# テスト用
+if __name__ == "__main__":
+    tokenizer = PrimeTokenizer()
+    val, words = tokenizer.calculate_resonance("愛と混沌のピザパーティー")
+    print(f"共鳴値: {val}")
+    print(f"成分: {words}")
