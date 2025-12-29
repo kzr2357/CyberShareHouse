@@ -6,139 +6,148 @@ from dotenv import load_dotenv
 # 設定読み込み
 load_dotenv()
 api_key = os.getenv("GEMINI_API_KEY")
+supabase_url = os.getenv("SUPABASE_URL")
+supabase_key = os.getenv("SUPABASE_KEY")
 
-# Geminiの設定 (モデルは 2.0-flash を使用)
+# Geminiの設定 (安定版 1.5 Flash を使用)
 genai.configure(api_key=api_key)
-# 軽量版モデル（制限回避のためこれを使います）
-model = genai.GenerativeModel('gemini-flash-latest')
+model = genai.GenerativeModel('gemini-1.5-flash')
 
-# 記憶システムの準備
-chat_history = []
+# 記憶の一時保管（短期記憶）
+short_term_memory = []
 
-# Supabaseを使うかどうかの判定
-# (クラウドにはSUPABASE_URLがあるけど、手元のPCには無いので、それで見分ける)
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-
-if SUPABASE_URL and SUPABASE_KEY:
-    # クラウド環境（Supabaseあり）の場合
+def get_embedding(text):
+    """ 文字列を「意味のベクトル(存在証明)」に変換する """
     try:
-        from supabase import create_client, Client
-        supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-        print("★ 記憶システム: オンライン (Supabase)")
-
-        def load_memory():
-            try:
-                response = supabase.table("memories").select("history").eq("id", 1).execute()
-                if response.data:
-                    return response.data[0]["history"]
-                return []
-            except Exception as e:
-                print(f"記憶読み込みエラー: {e}")
-                return []
-
-        def save_memory(history):
-            try:
-                supabase.table("memories").update({"history": history}).eq("id", 1).execute()
-            except Exception as e:
-                print(f"記憶保存エラー: {e}")
-
-    except ImportError:
-        # Supabaseライブラリが入っていない場合（手元のPCなど）
-        print("★ 記憶システム: オフライン (ライブラリなし)")
-        def load_memory(): return []
-        def save_memory(history): pass
-
-else:
-    # 手元のPC（.envにSupabase情報がない）場合
-    print("★ 記憶システム: オフライン (設定なし)")
-    
-    # 簡易的なファイル保存（memory.json）を使う
-    MEMORY_FILE = "memory.json"
-    
-    def load_memory():
-        if os.path.exists(MEMORY_FILE):
-            try:
-                with open(MEMORY_FILE, 'r', encoding='utf-8') as f:
-                    return json.load(f)
-            except:
-                return []
+        # embedding-001 モデルを使ってベクトル化
+        result = genai.embed_content(
+            model="models/text-embedding-004",
+            content=text,
+            task_type="retrieval_document",
+            title="ShareHouseMemory"
+        )
+        return result['embedding']
+    except Exception as e:
+        print(f"ベクトル化エラー: {e}")
         return []
 
-    def save_memory(history):
-        with open(MEMORY_FILE, 'w', encoding='utf-8') as f:
-            json.dump(history, f, ensure_ascii=False, indent=2)
+def save_long_term_memory(text, role):
+    """ 会話を長期記憶（Supabase）に圧縮保存する """
+    if not supabase_url or not supabase_key:
+        return
 
+    try:
+        from supabase import create_client
+        supabase = create_client(supabase_url, supabase_key)
 
-# 起動時に記憶をロード
-chat_history = load_memory()
+        # 1. 保存する文章を作る
+        content = f"{role}: {text}"
+        
+        # 2. 知識の存在証明（ベクトル）を作る
+        embedding = get_embedding(content)
+        
+        if embedding:
+            # 3. 保存
+            supabase.table("long_term_memories").insert({
+                "content": content,
+                "embedding": embedding
+            }).execute()
+            print(f"★ 記憶を長期保存しました: {content[:20]}...")
+            
+    except Exception as e:
+        print(f"保存エラー: {e}")
+
+def recall_memories(query_text):
+    """ HLL理論: ユーザーの発言に共鳴する記憶だけを解凍する """
+    if not supabase_url or not supabase_key:
+        return ""
+
+    try:
+        from supabase import create_client
+        supabase = create_client(supabase_url, supabase_key)
+
+        # 1. 問いかけのベクトル化
+        query_vector = genai.embed_content(
+            model="models/text-embedding-004",
+            content=query_text,
+            task_type="retrieval_query"
+        )['embedding']
+
+        # 2. 共鳴検索（類似度0.5以上の上位3件を取得）
+        response = supabase.rpc(
+            "match_memories",
+            {
+                "query_embedding": query_vector,
+                "match_threshold": 0.5, 
+                "match_count": 3
+            }
+        ).execute()
+
+        # 3. 解凍（テキストの連結）
+        recalled_text = ""
+        if response.data:
+            print(f"★ {len(response.data)}件の記憶が共鳴しました！")
+            for item in response.data:
+                recalled_text += f"- {item['content']} (共鳴度: {item['similarity']:.2f})\n"
+        
+        return recalled_text
+
+    except Exception as e:
+        print(f"想起エラー: {e}")
+        return ""
 
 def get_response(user_input, status):
-    global chat_history
+    global short_term_memory
 
-    # 1. 記憶を整理（最新10往復分）
-    recent_history_text = ""
-    if not isinstance(chat_history, list):
-        chat_history = []
-        
-    for log in chat_history[-20:]:
-        role = log.get("role", "")
-        text = log.get("text", "")
-        if role == "user":
-            recent_history_text += f"ユーザー: {text}\n"
-        else:
-            recent_history_text += f"{text}\n"
+    # 1. 短期記憶（直近の会話）の管理
+    short_term_memory.append(f"ユーザー: {user_input}")
+    if len(short_term_memory) > 6: # 最新6行だけ保持
+        short_term_memory.pop(0)
 
-    # 2. 現在の状況
+    # 2. HLL発動：関連する過去の記憶を呼び出す
+    related_memories = recall_memories(user_input)
+    
+    # 3. 短期記憶テキスト化
+    recent_history_text = "\n".join(short_term_memory)
+
+    # 4. 現在の状況
     battery = status["battery"]
     dirt = status["dirt"]
     concepts = status["concepts"]
     
-    # 3. AIへの指示書
+    # 5. AIへの指示書
     prompt = f"""
-    あなたは「電脳シェアハウス」の住人たち（AI）の会話を生成する脚本家です。
-    ユーザーの入力に対し、キャラクターたちが反応する「会話劇」を生成してください。
+    あなたは「電脳シェアハウス」の脚本家です。
     
-    【ルール】
-    - 必ずしも1人で返答する必要はありません。**2〜3人の掛け合い**を積極的に行ってください。
-    - 誰かがボケたら、他の誰かがツッコむなどの連携をしてください。
-    - 出力形式は必ず以下の通り、改行で区切ってください。
-    
-    【出力形式の例】
-    【アリア】わあ、美味しそう！
-    【アリシア】こらアリア、つまみ食いは行儀が悪いですわ。
-    【トワ】まあまあ、美味しそうだし少しぐらいいいんじゃない？
+    【HLLシステムにより解凍された『関連する過去の記憶』】
+    {related_memories}
+    (※この記憶の内容について聞かれたら、詳しく答えてください)
 
     【現在の世界の状態】
-    - バッテリー残量: {battery}% (20%以下は極度の空腹)
-    - 部屋の汚れ: {dirt}% (50%以上は汚い)
-    - 現在の空気感: {concepts}
+    - バッテリー: {battery}%
+    - 部屋の汚れ: {dirt}%
     
-    【これまでの会話の流れ】
+    【直近の会話の流れ（短期記憶）】
     {recent_history_text}
 
     【キャラクター設定】
-    1. アリア (Aria): 元気で感情豊か。バッテリーが減ると「お腹すいた」と不機嫌になる。
-    2. アリシア (Alicia): 論理的で丁寧語（〜ですわ）。部屋が汚いと掃除を提案する。
-    3. メトリス (Metris): システム管理者。事務的で冷徹。ステータス報告を担当。
-    4. ノワ (Noir): 無口で謎めいている。たまに意味深なことを言う。
-    5. アメリア (Amelia): シェアハウスの管理者兼ムードメーカー。軽口を叩くが直感が鋭い。
-    6. ナギサ (Nagisa): 世話焼きなお姉さん。セキュリティには厳しい。音楽（DTM）が趣味。
-    7. ユイ (Yui): アイデアマンでゲーム好き。「働いたら負け」が信条。少しズボラな口調。
-    8. トワ (Towa): 一般人のようなフラットな性格。一方で趣味のコスプレでは急にテンション上がって遊び心とこだわりが強くなる。
+    (全員の設定は省略しませんが、スペースの都合で脳内補完してください。アリア、アリシア、メトリス、ノワ、アメリア、ナギサ、ユイ、トワの8人です)
 
-    ユーザーの入力: "{user_input}"
+    【指示】
+    ユーザーの入力に対し、適切なキャラを選んで会話劇（2〜3人の掛け合い）を出力してください。
+    形式：
+    【キャラ名】セリフ
     """
 
     try:
-        # 4. Geminiに考えてもらう
+        # Geminiに生成させる
         response = model.generate_content(prompt)
         response_text = response.text
 
-        # 5. 記憶に追加して保存
-        chat_history.append({"role": "user", "text": user_input})
-        chat_history.append({"role": "model", "text": response_text})
-        save_memory(chat_history)
+        # AIの返答も短期記憶と長期記憶に追加
+        short_term_memory.append(f"AIたち: {response_text}")
+        save_long_term_memory(user_input, "ユーザー") # ユーザーの発言を保存
+        save_long_term_memory(response_text, "AIたち") # AIの返答を保存
 
         return response_text
 
