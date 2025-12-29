@@ -1,90 +1,119 @@
-import math
+import os
+import json
+import google.generativeai as genai
+from dotenv import load_dotenv
+# ★ 名前を変更してインポート
+from prime_tokenizer import SemanticPrimeTokenizer
 
-# ==========================================
-# ★ 世界を構成する「素数化された概念」辞書
-# ==========================================
-# 好きな単語と素数を紐付けられます
-CONCEPT_PRIMES = {
-    # 【感情・状態】
-    "愛": 2,
-    "好き": 2,
-    "混沌": 3,
-    "バグ": 3,
-    "希望": 5,
-    "夢": 5,
-    "絶望": 7,
-    "虚無": 7,
-    "怒り": 11,
-    "悲しみ": 13,
-    "喜び": 17,
-    "楽しい": 17,
-    "不安": 19,
+# 設定読み込み
+load_dotenv()
+api_key = os.getenv("GEMINI_API_KEY")
+supabase_url = os.getenv("SUPABASE_URL")
+supabase_key = os.getenv("SUPABASE_KEY")
+
+genai.configure(api_key=api_key)
+# モデル設定
+model = genai.GenerativeModel('gemini-flash-latest')
+
+# ★ トークナイザの初期化（新しい名前で）
+tokenizer = SemanticPrimeTokenizer()
+
+# 記憶の一時保管
+short_term_memory = []
+
+def get_embedding(text):
+    try:
+        result = genai.embed_content(
+            model="models/text-embedding-004", content=text,
+            task_type="retrieval_document", title="ShareHouseMemory"
+        )
+        return result['embedding']
+    except: return []
+
+def save_long_term_memory(text, role):
+    if not supabase_url or not supabase_key: return
+    try:
+        from supabase import create_client
+        supabase = create_client(supabase_url, supabase_key)
+        content = f"{role}: {text}"
+        embedding = get_embedding(content)
+        if embedding:
+            supabase.table("long_term_memories").insert({"content": content, "embedding": embedding}).execute()
+    except: pass
+
+def recall_memories(query_text):
+    if not supabase_url or not supabase_key: return ""
+    try:
+        from supabase import create_client
+        supabase = create_client(supabase_url, supabase_key)
+        query_vector = genai.embed_content(model="models/text-embedding-004", content=query_text, task_type="retrieval_query")['embedding']
+        response = supabase.rpc("match_memories", {"query_embedding": query_vector, "match_threshold": 0.5, "match_count": 3}).execute()
+        recalled = ""
+        if response.data:
+            for item in response.data: recalled += f"- {item['content']}\n"
+        return recalled
+    except: return ""
+
+def clear_context():
+    global short_term_memory
+    short_term_memory = []
+
+def get_response(user_input, status):
+    global short_term_memory
+
+    # 1. 素数共鳴の計算
+    resonance_val, resonance_words = tokenizer.calculate_resonance(user_input)
+    resonance_str = "×".join(resonance_words) if resonance_words else "無"
+
+    # 2. 記憶管理
+    short_term_memory.append(f"ユーザー: {user_input}")
+    if len(short_term_memory) > 6: short_term_memory.pop(0)
+
+    related_memories = recall_memories(user_input)
+    recent_history = "\n".join(short_term_memory)
     
-    # 【シェアハウス固有】
-    "ピザ": 23,
-    "空腹": 29,
-    "お腹": 29,
-    "掃除": 31,
-    "汚い": 31,
-    "ゲーム": 37,
-    "音楽": 41,
-    "歌": 41,
-    "コスプレ": 43,
-    "衣装": 43,
-    "仕事": 47,
-    "働": 47,
+    battery = status["battery"]
+    dirt = status["dirt"]
+
+    # 3. プロンプト
+    prompt = f"""
+    あなたは「電脳シェアハウス」の住人たちです。
     
-    # 【概念・世界】
-    "量子": 53,
-    "世界": 59,
-    "AI": 61,
-    "人間": 67,
-    "時間": 71,
-    "記憶": 73,
-    "共鳴": 79
-}
+    【★ 現在の重要パラメータ：意味論的共鳴】
+    - 検出概念: [{resonance_str}]
+    - 共鳴素数値: {resonance_val}
+    (※この概念が会話のテーマです。この雰囲気に合わせた会話をしてください)
 
-# 逆引き辞書（数字から意味に戻す用）
-PRIME_TO_CONCEPT = {v: k for k, v in CONCEPT_PRIMES.items()}
+    【重要ルール】
+    - 食事を与えられたら `【EVENT:EAT】` を出力。
+    - 出力の最後に、必ず `【RESONANCE:{resonance_val}:{resonance_str}】` と出力。
 
-class PrimeTokenizer:
-    def __init__(self):
-        self.primes = CONCEPT_PRIMES
+    【解凍された記憶】
+    {related_memories}
 
-    def calculate_resonance(self, text):
-        """ テキストに含まれる概念を掛け合わせて「共鳴値」を算出する """
-        resonance_value = 1
-        detected_concepts = []
+    【ステータス】
+    - バッテリー: {battery}%
+    - 汚れ: {dirt}%
+    
+    【会話ログ】
+    {recent_history}
 
-        # テキスト内にキーワードがあるか探す
-        for word, prime in self.primes.items():
-            if word in text:
-                resonance_value *= prime
-                # 重複表示を防ぐため、逆引き辞書の代表名を使う
-                concept_name = PRIME_TO_CONCEPT[prime]
-                if concept_name not in detected_concepts:
-                    detected_concepts.append(concept_name)
+    ユーザー入力: "{user_input}"
+    出力形式：
+    【キャラ名】セリフ
+    ...
+    【RESONANCE:...】
+    """
 
-        return resonance_value, detected_concepts
-
-    def decode_resonance(self, value):
-        """ 共鳴値（積）を素因数分解して、意味に戻す """
-        if value <= 1:
-            return []
+    try:
+        response = model.generate_content(prompt)
+        text = response.text
         
-        concepts = []
-        temp_value = value
-        
-        for prime, word in PRIME_TO_CONCEPT.items():
-            while temp_value % prime == 0:
-                concepts.append(word)
-                temp_value //= prime
-                
-        return concepts
+        short_term_memory.append(f"AIたち: {text}")
+        save_long_term_memory(user_input, "ユーザー")
+        save_long_term_memory(text, "AIたち")
 
-# テスト用
-if __name__ == "__main__":
-    tokenizer = PrimeTokenizer()
-    val, words = tokenizer.calculate_resonance("愛と混沌のピザパーティー")
-    print(f"共鳴値: {val}")
-    print(f"成分: {words}")
+        return text
+
+    except Exception as e:
+        return f"エラー: {str(e)}"
