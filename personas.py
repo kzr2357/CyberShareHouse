@@ -2,7 +2,6 @@ import os
 import json
 import google.generativeai as genai
 from dotenv import load_dotenv
-# 素数トークナイザを読み込み
 from prime_tokenizer import SemanticPrimeTokenizer
 
 # 設定読み込み
@@ -11,17 +10,19 @@ api_key = os.getenv("GEMINI_API_KEY")
 supabase_url = os.getenv("SUPABASE_URL")
 supabase_key = os.getenv("SUPABASE_KEY")
 
-genai.configure(api_key=api_key)\
+# APIキーの設定
+genai.configure(api_key=api_key)
+
+# ★モデル設定（ここがエラーの原因でした。Lite版を正しく指定します）
 model = genai.GenerativeModel('gemini-2.0-flash-lite')
 
 # トークナイザの初期化
 tokenizer = SemanticPrimeTokenizer()
 
-# 記憶の一時保管（短期記憶）
+# 記憶の一時保管
 short_term_memory = []
 
 def get_embedding(text):
-    """ 文字列を「意味のベクトル」に変換 """
     try:
         result = genai.embed_content(
             model="models/text-embedding-004",
@@ -34,7 +35,6 @@ def get_embedding(text):
         return []
 
 def save_long_term_memory(text, role):
-    """ 会話を長期記憶（Supabase）に保存 """
     if not supabase_url or not supabase_key:
         return
     try:
@@ -50,7 +50,6 @@ def save_long_term_memory(text, role):
         print(f"保存エラー: {e}")
 
 def recall_memories(query_text):
-    """ HLL理論: 関連記憶の解凍 """
     if not supabase_url or not supabase_key:
         return ""
     try:
@@ -60,7 +59,6 @@ def recall_memories(query_text):
             model="models/text-embedding-004", content=query_text, task_type="retrieval_query"
         )['embedding']
         
-        # 類似度検索
         response = supabase.rpc("match_memories", {
             "query_embedding": query_vector, "match_threshold": 0.5, "match_count": 3
         }).execute()
@@ -74,7 +72,6 @@ def recall_memories(query_text):
         return ""
 
 def clear_context():
-    """ 緊急メンテ用：短期記憶リセット """
     global short_term_memory
     short_term_memory = []
     print("★ 短期記憶を初期化しました")
@@ -82,24 +79,24 @@ def clear_context():
 def get_response(user_input, status):
     global short_term_memory
 
-    # 1. 素数共鳴の計算
+    # 1. 素数共鳴
     resonance_val, resonance_words = tokenizer.calculate_resonance(user_input)
     resonance_str = "×".join(resonance_words) if resonance_words else "無"
 
-    # 2. 記憶の管理
+    # 2. 記憶管理
     short_term_memory.append(f"ユーザー: {user_input}")
     if len(short_term_memory) > 6:
         short_term_memory.pop(0)
 
-    # 3. HLL記憶の解凍
+    # 3. HLL解凍
     related_memories = recall_memories(user_input)
     recent_history_text = "\n".join(short_term_memory)
 
-    # 4. ステータス取得
+    # 4. ステータス
     battery = status["battery"]
     dirt = status["dirt"]
     
-    # 5. AIへの指示書（キャラ設定を反映版）
+    # 5. プロンプト
     prompt = f"""
     あなたは「電脳シェアハウス」の住人たち（AI）の会話を生成する脚本家です。
     ユーザー入力に対し、適切なキャラを選んで会話劇（2〜3人の掛け合い）を出力してください。
