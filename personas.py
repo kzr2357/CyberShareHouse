@@ -11,9 +11,8 @@ api_key = os.getenv("GEMINI_API_KEY")
 supabase_url = os.getenv("SUPABASE_URL")
 supabase_key = os.getenv("SUPABASE_KEY")
 
-genai.configure(api_key=api_key)
-# ★一番安定して動くモデル設定（2.0は制限がきついのでflash-latestを使用）
-model = genai.GenerativeModel('gemini-flash-latest')
+genai.configure(api_key=api_key)\
+model = genai.GenerativeModel('gemini-2.0-flash-lite')
 
 # トークナイザの初期化
 tokenizer = SemanticPrimeTokenizer()
