@@ -10,7 +10,7 @@ api_key = os.getenv("GEMINI_API_KEY")
 # Geminiの設定 (モデルは 2.0-flash を使用)
 genai.configure(api_key=api_key)
 # 軽量版モデル（制限回避のためこれを使います）
-model = genai.GenerativeModel('gemini-2.0-flash-lite')
+model = genai.GenerativeModel('gemini-flash-latest')
 
 # 記憶システムの準備
 chat_history = []
