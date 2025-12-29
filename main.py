@@ -78,7 +78,11 @@ async def on_message(message):
         house.battery = 100.0
         house.dirt = 0.0
         house.concepts = []
-        await send_as_character(message.channel, "システム", "【システム】管理者権限による強制介入を確認……。\n生命維持装置、出力最大。環境浄化シーケンス完了。\n住人の意識レベル、正常値に戻りました。")
+        
+        # ★ここで記憶をリセットする！
+        personas.clear_context()
+
+        await send_as_character(message.channel, "システム", "【システム】全ステータス回復。短期記憶バッファを消去しました。正常モードへ移行します。")
         return
 
     # ピザコマンド

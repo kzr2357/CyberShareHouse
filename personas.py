@@ -96,6 +96,13 @@ def recall_memories(query_text):
         print(f"想起エラー: {e}")
         return ""
 
+
+def clear_context():
+    global short_term_memory
+    short_term_memory = []
+    print("★ 短期記憶を初期化しました")
+
+
 def get_response(user_input, status):
     global short_term_memory
 
