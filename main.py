@@ -1,7 +1,7 @@
 import discord
 import os
 import re
-import asyncio # 群像劇の間（ま）を作るために必要
+import asyncio
 from dotenv import load_dotenv
 from system_core import ShareHouseSystem
 import personas
@@ -41,7 +41,6 @@ AVATARS = {
 
     "システム": "https://media.discordapp.net/attachments/1454810187851501611/1454875481445896283/IMG_0654.png?ex=6952ade1&is=69515c61&hm=abfd5ec0e5ac96e8b7abeb8c162e53c40fca971412770a696c320e2ad355c972&=&format=webp&quality=lossless&width=825&height=825",
 
-    # --- 今回追加したメンバー ---
     "アメリア": "https://media.discordapp.net/attachments/1454810187851501611/1454896216201498735/IMG_0673.png?ex=6952c130&is=69516fb0&hm=34dc01801c95f87383b1b1dbe38115a2b92d4c3b8bfb30b89eef97e8cb83f4c0&=&format=webp&quality=lossless&width=695&height=695",
     "Amelia":   "https://media.discordapp.net/attachments/1454810187851501611/1454896216201498735/IMG_0673.png?ex=6952c130&is=69516fb0&hm=34dc01801c95f87383b1b1dbe38115a2b92d4c3b8bfb30b89eef97e8cb83f4c0&=&format=webp&quality=lossless&width=695&height=695",
 
@@ -74,6 +73,14 @@ async def on_message(message):
     if message.author.bot:
         return
 
+    # 緊急メンテナンス（詰んだ時の救済処置）
+    if message.content == "緊急メンテ":
+        house.battery = 100.0
+        house.dirt = 0.0
+        house.concepts = []
+        await send_as_character(message.channel, "システム", "【システム】管理者権限による強制介入を確認……。\n生命維持装置、出力最大。環境浄化シーケンス完了。\n住人の意識レベル、正常値に戻りました。")
+        return
+
     # ピザコマンド
     if message.content == "ピザ":
         house.battery = 100.0
@@ -82,7 +89,6 @@ async def on_message(message):
 
     # 通常会話
     status = house.get_status()
-    # 脚本を取得
     script_text = personas.get_response(message.content, status)
     
     # 脚本を再生
@@ -96,7 +102,7 @@ async def on_message(message):
             name = match.group(1)
             content = match.group(2)
             await send_as_character(message.channel, name, content)
-            await asyncio.sleep(1.0) # 1秒待機
+            await asyncio.sleep(1.0)
         else:
             await message.channel.send(line)
 
