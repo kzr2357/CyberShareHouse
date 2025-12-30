@@ -63,6 +63,7 @@ async def send_as_character(channel, name, content):
         await webhook.send(content=content, username=name, avatar_url=avatar_url)
     except Exception as e:
         await channel.send(f"{name}: {content}")
+        print(f"【デバッグ】Webhook送信エラー: {e}")
 
 @client.event
 async def on_ready():
