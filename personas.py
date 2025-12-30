@@ -13,7 +13,7 @@ supabase_key = os.getenv("SUPABASE_KEY")
 # APIキーの設定
 genai.configure(api_key=api_key)
 
-model = genai.GenerativeModel('gemini-1.5-flash')
+model = genai.GenerativeModel('gemini-flash-latest')
 
 # トークナイザの初期化
 tokenizer = SemanticPrimeTokenizer()
